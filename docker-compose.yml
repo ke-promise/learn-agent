@@ -1,0 +1,97 @@
+﻿services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: mini_agent
+      POSTGRES_USER: mini_agent
+      POSTGRES_PASSWORD: mini_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  sql-agent:
+    build:
+      context: .
+      dockerfile: docker/python-service.Dockerfile
+    command: uvicorn services.sql_agent_service.app:app --host 0.0.0.0 --port 8300
+    environment:
+      STORAGE_BACKEND: postgres
+      POSTGRES_URL: postgresql+psycopg://mini_agent:mini_agent@postgres:5432/mini_agent
+    depends_on:
+      - postgres
+    ports:
+      - "8300:8300"
+
+  report-agent:
+    build:
+      context: .
+      dockerfile: docker/python-service.Dockerfile
+    command: uvicorn services.report_agent_service.app:app --host 0.0.0.0 --port 8200
+    ports:
+      - "8200:8200"
+
+  mcp-server:
+    build:
+      context: .
+      dockerfile: docker/python-service.Dockerfile
+    command: python -m services.mcp_server.run
+    environment:
+      STORAGE_BACKEND: postgres
+      POSTGRES_URL: postgresql+psycopg://mini_agent:mini_agent@postgres:5432/mini_agent
+      SQL_AGENT_URL: http://sql-agent:8300
+    depends_on:
+      - postgres
+      - sql-agent
+    ports:
+      - "8100:8100"
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/python-service.Dockerfile
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      STORAGE_BACKEND: postgres
+      CONVERSATION_BACKEND: redis
+      OBJECT_STORAGE_BACKEND: minio
+      POSTGRES_URL: postgresql+psycopg://mini_agent:mini_agent@postgres:5432/mini_agent
+      REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: knowledge-files
+      MINIO_SECURE: "false"
+      MCP_SERVER_URL: http://mcp-server:8100/mcp
+      REMOTE_REPORT_AGENT_URL: http://report-agent:8200/report
+      SQL_AGENT_URL: http://sql-agent:8300
+    depends_on:
+      - postgres
+      - redis
+      - minio
+      - mcp-server
+      - report-agent
+      - sql-agent
+    ports:
+      - "8000:8000"
+
+volumes:
+  postgres_data:
+  minio_data:
